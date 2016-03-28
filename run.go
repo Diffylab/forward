@@ -56,7 +56,7 @@ func main() {
     // Read a bunch of files for inputs
     filters := floatsFromFile(base_path + "/filters.txt", "\n")
     biases := floatsFromFile(base_path + "/biases.txt", "\n")
-    inputs := floatsFromFile(base_path + "/input.txt", ",")
+    inputs := floatsFromFile(base_path + "/input.txt", "\n")
     output := floatsFromFile(base_path + "/out.txt", "\n")
 
     // Run the kernel
