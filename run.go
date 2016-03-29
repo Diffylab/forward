@@ -73,14 +73,16 @@ func main() {
     // Run the kernel
     convBuffer := convolve(nacl, convKernel, filters, inputBuffer, len(output), int32(1), 1024, 8192)
     output_ := repeatedAdd(nacl, repeatedAddKernel, biases, convBuffer, len(output), 64, 8192)
-    tanBuffer, tanhOut := tanh(nacl, tanhKernel, convBuffer, len(output_))
+    tanBuffer, _ := tanh(nacl, tanhKernel, convBuffer, len(output_))
 
     outputBuffer := convolve(nacl, convKernel, filters2, tanBuffer, 7, int32(0), 7, 7)
     output_ = repeatedAdd(nacl, repeatedAddKernel, biases2, outputBuffer, 7, 64, 64)
 
     // Verify the output
+    /*
     floatsToFile("tanhout.txt", tanhOut)
     floatsToFile("out.txt", output_)
+    */
     fmt.Printf("Results: %v\n", output_)
 }
 
@@ -128,15 +130,11 @@ func repeatedAdd(nacl *cl.NaCL, kernel *cl.Kernel, biases []float32, outputBuffe
     // todo: function to get work size
 	_, err = nacl.Queue.EnqueueNDRangeKernel(kernel, nil, []int{globalWorkSize}, []int{localWorkSize}, nil)
     check(err)
-    fmt.Printf("Ran kernel\n")
-
 
     output := make([]float32, output_size)
     _, err = nacl.Queue.EnqueueReadBufferFloat32(outputBuffer, true, 0, output, nil)
     check(err)
 
-    nacl.Queue.Finish()
-    fmt.Printf("Output: %d\n", len(output))
     return output
 }
 
