@@ -68,9 +68,9 @@ void kernel convolve_imagecubes_float2(
     int filterId = outputImage2Id & 0b111;
 
     // intraimage coords
-    int localid = isFirstTime ? globalId & 0b1111111111 : globalId & 0b1;
-    int outputRow = isFirstTime ? localid >> 10 : localid;
-    int outputCol = isFirstTime ? localid & 0b11111 : localid & 0b1;
+    int localid = isFirstTime ? globalId & 0b1111111111 : 0;
+    int outputRow = isFirstTime ? localid >> 5 : localid;
+    int outputCol = isFirstTime ? localid & 0b11111 : 0;
 
     int const temp1 = isFirstTime ? exampleId << 10 : exampleId << 13;
     int const temp2 = isFirstTime ? filterId * gFilterSizeSquared : (filterId * gFilterSizeSquared) << 3;
