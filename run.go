@@ -59,21 +59,41 @@ func main() {
     inputs := floatsFromFile(base_path + "/input.txt", "\n")
     output := floatsFromFile(base_path + "/out.txt", "\n")
 
-    // Run the kernel
+    filters2 := floatsFromFile(base_path + "/filters2.txt", "\n")
+    biases2 := floatsFromFile(base_path + "/bias2.txt", "\n")
+
+    // Compile needed kernels
     nacl := cl.NewNaCL()
-    outputBuffer := convolve(nacl, filters, inputs, len(output))
-    output_ := repeatedAdd(nacl, biases, outputBuffer, len(output))
-    _, tanhOut := tanh(nacl, outputBuffer, len(output_))
-    floatsToFile("tanhout.txt", tanhOut)
-    floatsToFile("convout.txt", output_)
+    convKernel := compileKernel(nacl, "convolve_imagecubes_float2")
+    tanhKernel := compileKernel(nacl, "forwardNaive")
+    repeatedAddKernel := compileKernel(nacl, "repeated_add")
+
+    inputBuffer := createBuffer(nacl, inputs)
+
+    // Run the kernel
+    convBuffer := convolve(nacl, convKernel, filters, inputBuffer, len(output), int32(1), 1024, 8192)
+    output_ := repeatedAdd(nacl, repeatedAddKernel, biases, convBuffer, len(output), 64, 8192)
+    tanBuffer, tanhOut := tanh(nacl, tanhKernel, convBuffer, len(output_))
+
+    outputBuffer := convolve(nacl, convKernel, filters2, tanBuffer, 7, int32(0), 7, 7)
+    output_ = repeatedAdd(nacl, repeatedAddKernel, biases2, outputBuffer, 7, 64, 64)
 
     // Verify the output
-    //fmt.Printf("%v\n", tanhOut)
+    floatsToFile("tanhout.txt", tanhOut)
+    floatsToFile("out.txt", output_)
+    fmt.Printf("Results: %v\n", output_)
 }
 
-func tanh(nacl *cl.NaCL, inputBuffer *cl.MemObject, N int) (*cl.MemObject, []float32) {
-    kernel := compileKernel(nacl, "forwardNaive")
+func createBuffer(nacl *cl.NaCL, arr []float32) *cl.MemObject {
+	buffer, err := nacl.Context.CreateEmptyBuffer(cl.MemReadWrite, len(arr) * 32/8)
+    check(err)
 
+    _, err = nacl.Queue.EnqueueWriteBufferFloat32(buffer, true, 0, arr, nil)
+    check(err)
+    return buffer
+}
+
+func tanh(nacl *cl.NaCL, kernel *cl.Kernel, inputBuffer *cl.MemObject, N int) (*cl.MemObject, []float32) {
 	outputBuffer, err := nacl.Context.CreateEmptyBuffer(cl.MemReadWrite, N * 32/8)
     check(err)
 
@@ -82,19 +102,16 @@ func tanh(nacl *cl.NaCL, inputBuffer *cl.MemObject, N int) (*cl.MemObject, []flo
 
 	_, err = nacl.Queue.EnqueueNDRangeKernel(kernel, nil, []int{8192}, []int{1024}, nil)
     check(err)
-    fmt.Printf("Ran tanh kernel\n")
 
     output := make([]float32, N)
     _, err = nacl.Queue.EnqueueReadBufferFloat32(outputBuffer, true, 0, output, nil)
     check(err)
 
-    fmt.Printf("Output length: %d\n", len(output))
     return outputBuffer, output
 }
 
 
-func repeatedAdd(nacl *cl.NaCL, biases []float32, outputBuffer *cl.MemObject, output_size int) []float32 {
-    kernel := compileKernel(nacl, "repeated_add")
+func repeatedAdd(nacl *cl.NaCL, kernel *cl.Kernel, biases []float32, outputBuffer *cl.MemObject, output_size int, localWorkSize int, globalWorkSize int) []float32 {
     var N int32 = 8192
     var sourceSize int32 = 8
     var repeatSize int32 = 1024
@@ -109,7 +126,7 @@ func repeatedAdd(nacl *cl.NaCL, biases []float32, outputBuffer *cl.MemObject, ou
     check(err);
 
     // todo: function to get work size
-	_, err = nacl.Queue.EnqueueNDRangeKernel(kernel, nil, []int{8192}, []int{64}, nil)
+	_, err = nacl.Queue.EnqueueNDRangeKernel(kernel, nil, []int{globalWorkSize}, []int{localWorkSize}, nil)
     check(err)
     fmt.Printf("Ran kernel\n")
 
@@ -118,51 +135,24 @@ func repeatedAdd(nacl *cl.NaCL, biases []float32, outputBuffer *cl.MemObject, ou
     _, err = nacl.Queue.EnqueueReadBufferFloat32(outputBuffer, true, 0, output, nil)
     check(err)
 
-    // fmt.Printf("Output: %d\n", len(output))
+    nacl.Queue.Finish()
+    fmt.Printf("Output: %d\n", len(output))
     return output
 }
 
-func convolve(nacl *cl.NaCL, filters []float32, inputs []float32, output_size int) *cl.MemObject {
-    kernel := compileKernel(nacl, "convolve_imagecubes_float2")
+func convolve(nacl *cl.NaCL, kernel *cl.Kernel, filters []float32, inputBuffer *cl.MemObject, output_size int, firstFlag int32, localWorkSize int, globalWorkSize int) *cl.MemObject {
     var num_examples int32 = 1
 
-	input_buffer, err := nacl.Context.CreateEmptyBuffer(cl.MemReadWrite, len(inputs) * 32/8)
-    check(err)
-
-    _, err = nacl.Queue.EnqueueWriteBufferFloat32(input_buffer, true, 0, inputs, nil)
-    check(err)
-
-	weights_buffer, err := nacl.Context.CreateEmptyBuffer(cl.MemReadWrite, len(filters) * 32/8)
-    check(err)
-    _, err = nacl.Queue.EnqueueWriteBufferFloat32(weights_buffer, true, 0, filters, nil)
-    check(err)
+    weights_buffer := createBuffer(nacl, filters)
 
 	outputBuffer, err := nacl.Context.CreateEmptyBuffer(cl.MemReadWrite, output_size * 32/8)
     check(err)
 
-    var outputSizeSquared, numFilters, outputSize, numInputPlanes int32
-    outputSizeSquared = 1024
-    numFilters = 8
-    outputSize = 32
-    numInputPlanes = 1
-
-    err = kernel.SetArgs(num_examples, input_buffer, weights_buffer, outputBuffer,
-                         outputSizeSquared, numFilters, outputSize,
-                         numInputPlanes)
+    err = kernel.SetArgs(num_examples, inputBuffer, weights_buffer, outputBuffer, firstFlag)
     check(err);
 
-    // todo: function to get work size
-	_, err = nacl.Queue.EnqueueNDRangeKernel(kernel, nil, []int{8192}, []int{1024}, nil)
+	_, err = nacl.Queue.EnqueueNDRangeKernel(kernel, nil, []int{globalWorkSize}, []int{localWorkSize}, nil)
     check(err)
-    fmt.Printf("Ran convolve kernel\n")
-
-    /*
-    output := make([]float32, output_size)
-    _, err = nacl.Queue.EnqueueReadBufferFloat32(outputBuffer, true, 0, output, nil)
-    check(err)
-
-    fmt.Printf("Output: %d\n", len(output))
-    */
 
     return outputBuffer
 }
@@ -186,7 +176,7 @@ func getCLContext() *cl.Context {
 }
 
 func compileKernel(nacl *cl.NaCL, kernelName string) *cl.Kernel {
-	filename := "./forward.cl"
+	filename := "./kernel_file.cl"
 
 	filebytes, err := ioutil.ReadFile(filename)
 	if err != nil {
@@ -194,17 +184,6 @@ func compileKernel(nacl *cl.NaCL, kernelName string) *cl.Kernel {
 	}
 
 	fileString := string(filebytes)
-
-    /*
-	command_queue, err := context.CreateCommandQueue(devices[0], cl.CommandQueueProfilingEnable)
-	if err != nil {
-		panic(err)
-	}
-	buffer, err := context.CreateEmptyBuffer(cl.MemReadWrite, 128)
-	if err != nil {
-		panic(err)
-	}
-    */
 
 	program, err := nacl.Context.CreateProgramWithSource([]string{fileString})
 	if err != nil {
@@ -222,34 +201,4 @@ func compileKernel(nacl *cl.NaCL, kernelName string) *cl.Kernel {
 	}
 
     return kernel
-    /*
-	err = kernel.SetArgs(size)
-	if err != nil {
-        fmt.Printf("Error setting args.\n")
-		panic(err)
-	}
-
-	_, err = command_queue.EnqueueNDRangeKernel(kernel, []int{1,1,1}, []int{1,1,1}, []int{1,1,1}, nil)
-	if err != nil {
-		panic(err)
-	}
-
-    resPtr := C.CString(string(make([]byte, 128)))
-
-	_, err = command_queue.EnqueueReadBuffer(buffer, true, 0, 128, unsafe.Pointer(resPtr), nil)
-	if err != nil {
-		panic(err)
-	}
-
-	result := C.GoString(resPtr)
-
-	fmt.Printf("Result: %s\n", result)
-
-	kernel.Release()
-	program.Release()
-	buffer.Release()
-	command_queue.Release()
-	context.Release()
-    return context
-    */
 }

@@ -67,7 +67,7 @@ void kernel convolve_imagecubes_float2(
         const int gOutputSize, const int gNumInputPlanes) {
 
     const int gInputSizeSquared = 1024;
-    const int gFilterSizeSquared = 1024;
+    const int gFilterSizeSquared = 25;
     const int gFilterSize = 5;
     const int gHalfFilterSize = 2;
     const int gInputSize = 32;
@@ -110,6 +110,9 @@ void kernel convolve_imagecubes_float2(
                     #endif
                     bool process = rowOk && (outputCol + v) >= 0 && (outputCol + v) < gInputSize;
                     if (process) {
+                            if (globalId==1025) {
+                                printf("Sum: %f, inputRow: %f, filterRow: %f\n", sum, inputRow[outputCol + v], filterRow[v]);
+                            }
                             sum += inputRow[outputCol + v] * filterRow[v];
                     }
                 }
