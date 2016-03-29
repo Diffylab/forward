@@ -28,15 +28,14 @@ kernel void forwardNaive(const int N, global float * restrict out, global const 
 
 void kernel convolve_imagecubes_float2(
     const int numExamples,
-    global const float * restrict inputs, global const float * restrict filters, 
+      global const float * restrict inputs, global const float * restrict filters, 
     global float * restrict output, const int isFirstTime) {
     int globalId = get_global_id(0);
 
-    int gInputSizeSquared;
+    const int gInputSizeSquared = 1024;
+    const int gInputSize = 32;
     int gHalfFilterSize;
-    int gInputSize;
     int gEven;
-    int gOutputSizeSquared;
     int gNumFilters;
     int gOutputSize;
     int gNumInputPlanes;
@@ -45,11 +44,8 @@ void kernel convolve_imagecubes_float2(
     int gPadZeros;
 
     if (isFirstTime) {
-    	gInputSizeSquared = 1024;
     	gHalfFilterSize = 2;
-    	gInputSize = 32;
     	gEven = 0;
-    	gOutputSizeSquared = 1024;
     	gNumFilters = 8;
     	gOutputSize = 32;
     	gNumInputPlanes = 1;
@@ -57,11 +53,8 @@ void kernel convolve_imagecubes_float2(
     	gFilterSizeSquared = 25;
     	gPadZeros = 1;
     } else {
-    	gInputSizeSquared = 1024;
     	gHalfFilterSize = 16;
-    	gInputSize = 32;
     	gEven = 1;
-    	gOutputSizeSquared = 1;
     	gNumFilters = 7;
     	gOutputSize = 1;
     	gNumInputPlanes = 8;
@@ -70,17 +63,19 @@ void kernel convolve_imagecubes_float2(
     	gPadZeros = 0;
     }
 
-    int outputImage2Id = globalId / gOutputSizeSquared;
-    int exampleId = outputImage2Id / gNumFilters;
-    int filterId = outputImage2Id % gNumFilters;
+    int outputImage2Id = isFirstTime ? globalId >> 10 : globalId;
+    int exampleId = outputImage2Id >> 3;
+    int filterId = outputImage2Id & 0b111;
 
     // intraimage coords
-    int localid = globalId % gOutputSizeSquared;
-    int outputRow = localid / gOutputSize;
-    int outputCol = localid % gOutputSize;
+    int localid = isFirstTime ? globalId & 0b1111111111 : globalId & 0b1;
+    int outputRow = isFirstTime ? localid >> 10 : localid;
+    int outputCol = isFirstTime ? localid & 0b11111 : localid & 0b1;
 
-    global float const*inputCube = inputs + exampleId * gNumInputPlanes * gInputSizeSquared;
-    global float const*filterCube = filters + filterId * gNumInputPlanes * gFilterSizeSquared;
+    int const temp1 = isFirstTime ? exampleId << 10 : exampleId << 13;
+    int const temp2 = isFirstTime ? filterId * gFilterSizeSquared : (filterId * gFilterSizeSquared) << 3;
+    global float const*inputCube = inputs + temp1;
+    global float const*filterCube = filters + temp2;
 
     float sum = 0;
     if (exampleId < numExamples) {
@@ -89,11 +84,9 @@ void kernel convolve_imagecubes_float2(
             global float const*filterPlane = filterCube + inputPlaneIdx * gFilterSizeSquared;
             for (int u = -gHalfFilterSize; u <= gHalfFilterSize - gEven; u++) {
                 // trying to reduce register pressure...
-		int inputRowIdx;
-		if (gPadZeros) {
-			inputRowIdx = outputRow + u;
-		} else {
-			inputRowIdx = outputRow + u + gHalfFilterSize;
+		int inputRowIdx = outputRow + u;
+		if (!gPadZeros) {
+			inputRowIdx += gHalfFilterSize;
 		}
                 global float const *inputRow = inputPlane + inputRowIdx * gInputSize;
                 global float const *filterRow = filterPlane + (u+gHalfFilterSize) * gFilterSize + gHalfFilterSize;
@@ -119,6 +112,7 @@ void kernel convolve_imagecubes_float2(
         output[globalId] = sum;
     }
 }
+
 
 
 kernel void repeated_add(const int N, const int sourceSize, const int repeatSize, global float * restrict target, global const float * restrict source) {
