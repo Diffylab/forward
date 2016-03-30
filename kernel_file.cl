@@ -17,7 +17,7 @@
 #endif
 
 #ifdef ACTIVATION_FUNCTION // protect against not defined
-__attribute__((num_simd_work_items(8)))
+__attribute__((num_simd_work_items(4)))
 __attribute__((reqd_work_group_size(1024,1,1)))
 kernel void forwardNaive(global float * restrict out, global const float * restrict in) {
     const int globalId = get_global_id(0);
@@ -27,8 +27,11 @@ kernel void forwardNaive(global float * restrict out, global const float * restr
 
 void kernel convolve_imagecubes_float2(
     const int numExamples,
-      global const float * restrict inputs, global const float * restrict filters, 
-    global float * restrict output, const int isFirstTime) {
+    global const float * restrict inputs, 
+    global const float * restrict filters, 
+    global float * restrict output, 
+    const int isFirstTime) {
+
     int globalId = get_global_id(0);
 
     const int gInputSizeSquared = 1024;
@@ -110,7 +113,7 @@ void kernel convolve_imagecubes_float2(
         output[globalId] = sum;
     }
 }
-/*
+
 __attribute__((num_compute_units(2)))
 __attribute__((num_simd_work_items(4)))
 __attribute__((reqd_work_group_size(64,1,1)))
@@ -124,4 +127,3 @@ kernel void repeated_add2(global float * restrict target, global const float * r
     const int globalId = get_global_id(0);
     target[globalId] += source[ globalId & 0b111 ];
 }
-*/
