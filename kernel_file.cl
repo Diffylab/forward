@@ -17,11 +17,10 @@
 #endif
 
 #ifdef ACTIVATION_FUNCTION // protect against not defined
-kernel void forwardNaive(const int N, global float * restrict out, global const float * restrict in) {
+__attribute__((num_simd_work_items(8)))
+__attribute__((reqd_work_group_size(1024,1,1)))
+kernel void forwardNaive(global float * restrict out, global const float * restrict in) {
     const int globalId = get_global_id(0);
-    if (globalId >= N) {
-        return;
-    }
     out[globalId] = ACTIVATION_FUNCTION(in[globalId]);
 }
 #endif
@@ -111,14 +110,18 @@ void kernel convolve_imagecubes_float2(
         output[globalId] = sum;
     }
 }
-
-
-
-kernel void repeated_add(const int N, const int sourceSize, const int repeatSize, global float * restrict target, global const float * restrict source) {
+/*
+__attribute__((num_compute_units(2)))
+__attribute__((num_simd_work_items(4)))
+__attribute__((reqd_work_group_size(64,1,1)))
+kernel void repeated_add1(global float * restrict target, global const float * restrict source) {
     const int globalId = get_global_id(0);
-    if (globalId >= N) {
-        return;
-    }
-    target[globalId] += source[ (globalId / repeatSize) % sourceSize ];
+    target[globalId] += source[ (globalId >> 10) & 0b111 ];
 }
 
+__attribute__((reqd_work_group_size(64,1,1)))
+kernel void repeated_add2(global float * restrict target, global const float * restrict source) {
+    const int globalId = get_global_id(0);
+    target[globalId] += source[ globalId & 0b111 ];
+}
+*/

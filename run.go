@@ -48,6 +48,14 @@ func floatsToFile(fp string, arr []float32) {
 	f.Close()
 }
 
+type naclContext struct {
+	NaCl             *cl.Nacl
+	weights_buffer_1 *cl.MemObject
+	weights_buffer_2 *cl.MemObject
+	bias_buffer_1    *cl.MemObject
+	bias_buffer_2    *cl.MemObject
+}
+
 func main() {
 	if len(os.Args) != 2 {
 		fmt.Printf("Usage: %s <path to floats files>\n", os.Args[0])
@@ -56,9 +64,7 @@ func main() {
 	base_path := os.Args[1]
 
 	/*
-
 		SETUP
-
 	*/
 
 	start := time.Now()
@@ -76,7 +82,6 @@ func main() {
 	nacl := cl.NewNaCL()
 	convKernel := compileKernel(nacl, "convolve_imagecubes_float2")
 	tanhKernel := compileKernel(nacl, "forwardNaive")
-	repeatedAddKernel := compileKernel(nacl, "repeated_add")
 
 	weights_buffer_1 := createBuffer(nacl, filters)
 
@@ -93,28 +98,29 @@ func main() {
 	fmt.Printf("Setup time is (%s)\n", time_diff)
 
 	/*
-
 		END OF SETUP
-
 	*/
-
-	start = time.Now()
 
 	inputBuffer := createBuffer(nacl, inputs)
 
+	start = time.Now()
 	// Run the kernel
+	fmt.Printf("output size %d\n", len(biases2))
 	convBuffer := convolve(nacl, convKernel, weights_buffer_1, inputBuffer, len(output), int32(1), 1024, 8192)
-	_ = repeatedAdd(nacl, repeatedAddKernel, bias_buffer_1, convBuffer, len(output), 64, 8192, false)
-	tanBuffer := tanh(nacl, tanhKernel, convBuffer, 8192)
 
-	outputBuffer := convolve(nacl, convKernel, weights_buffer_2, tanBuffer, 7, int32(0), 7, 7)
-	output_ := repeatedAdd(nacl, repeatedAddKernel, bias_buffer_2, outputBuffer, 7, 64, 64, true)
+	_ = repeatedAdd(nacl, nil, bias_buffer_1, convBuffer, len(output), 64, 8192, false, 8192, 8, 1024)
+
+	tanBuffer := tanh(nacl, tanhKernel, convBuffer)
+	nacl.Queue.Finish()
+
+	outputBuffer := convolve(nacl, convKernel, weights_buffer_2, tanBuffer, 8, int32(0), 8, 8)
+
+	output_ := repeatedAdd(nacl, nil, bias_buffer_2, outputBuffer, 8, 64, 64, true, 8, 8, 1)
 
 	nacl.Queue.Finish()
 
-	time_diff = time.Since(start)
+	fmt.Printf("run time time is (%s)\n", time.Since(start))
 
-	fmt.Printf("Kernel time is (%s)\n", time_diff)
 	// Verify the output
 	fmt.Printf("Results: %v\n", output_)
 }
@@ -128,40 +134,41 @@ func createBuffer(nacl *cl.NaCL, arr []float32) *cl.MemObject {
 	return buffer
 }
 
-func tanh(nacl *cl.NaCL, kernel *cl.Kernel, inputBuffer *cl.MemObject, N int) *cl.MemObject {
-	outputBuffer, err := nacl.Context.CreateEmptyBuffer(cl.MemReadWrite, N*32/8)
+func tanh(nacl *cl.NaCL, kernel *cl.Kernel, inputBuffer *cl.MemObject) *cl.MemObject {
+	outputBuffer, err := nacl.Context.CreateEmptyBuffer(cl.MemReadWrite, 8192*32/8)
 	check(err)
 
-	err = kernel.SetArgs(int32(N), outputBuffer, inputBuffer)
+	err = kernel.SetArgs(outputBuffer, inputBuffer)
 	check(err)
-
 	_, err = nacl.Queue.EnqueueNDRangeKernel(kernel, nil, []int{8192}, []int{1024}, nil)
 	check(err)
 
 	return outputBuffer
 }
 
-func repeatedAdd(nacl *cl.NaCL, kernel *cl.Kernel, source_buffer *cl.MemObject, outputBuffer *cl.MemObject, output_size int, localWorkSize int, globalWorkSize int, readOutput bool) []float32 {
-	var N int32 = 8192
-	var sourceSize int32 = 8
-	var repeatSize int32 = 1024
+func repeatedAdd(nacl *cl.NaCL, kernel *cl.Kernel, source_buffer *cl.MemObject, outputBuffer *cl.MemObject, output_size int, localWorkSize int, globalWorkSize int, readOutput bool, N int32, sourceSize int32, repeatSize int32) []float32 {
 
-	err := kernel.SetArgs(N, sourceSize, repeatSize, outputBuffer, source_buffer)
+	source := make([]float32, 8)
+	output := make([]float32, output_size)
+
+	_, err := nacl.Queue.EnqueueReadBufferFloat32(source_buffer, true, 0, source, nil)
 	check(err)
 
-	// todo: function to get work size
-	_, err = nacl.Queue.EnqueueNDRangeKernel(kernel, nil, []int{globalWorkSize}, []int{localWorkSize}, nil)
+	_, err = nacl.Queue.EnqueueReadBufferFloat32(outputBuffer, true, 0, output, nil)
 	check(err)
-	fmt.Printf("Ran kernel\n")
+
+	nacl.Queue.Finish()
+
+	for i, _ := range output {
+		output[i] += source[(int32(i)/repeatSize)%sourceSize]
+	}
 
 	if readOutput {
-		output := make([]float32, output_size)
-		_, err = nacl.Queue.EnqueueReadBufferFloat32(outputBuffer, true, 0, output, nil)
-		check(err)
-
-		fmt.Printf("Output: %d\n", len(output))
 		return output
 	}
+
+	_, err = nacl.Queue.EnqueueWriteBufferFloat32(outputBuffer, true, 0, output, nil)
+	check(err)
 
 	return nil
 }
